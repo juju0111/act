@@ -55,10 +55,15 @@ class DETRVAE(nn.Module):
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            # self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            # 팔이 한개라서 수정 필요.
+            # RoboManipBaseline 버전
+            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            # self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            # RoboManipBaseline 버전
+            self.input_proj_robot_state = nn.Linear(7, hidden_dim)
             self.input_proj_env_state = nn.Linear(7, hidden_dim)
             self.pos = torch.nn.Embedding(2, hidden_dim)
             self.backbones = None
@@ -66,8 +71,13 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        # self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
+        # self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        
+        # RoboManipBaseline 버전
+        self.encoder_action_proj = nn.Linear(7, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(7, hidden_dim)  # project qpos to embedding
+        
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -86,12 +96,14 @@ class DETRVAE(nn.Module):
         bs, _ = qpos.shape
         ### Obtain latent z from action sequence
         if is_training:
+            # print("action shape : ", actions.shape)
             # project action sequence to embedding dim, and concat with a CLS token
             action_embed = self.encoder_action_proj(actions) # (bs, seq, hidden_dim)
             qpos_embed = self.encoder_joint_proj(qpos)  # (bs, hidden_dim)
             qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
+            # print("cls_embed shape :", cls_embed.shape, qpos_embed.shape, action_embed.shape )
             encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
             # do not mask cls token
@@ -101,7 +113,8 @@ class DETRVAE(nn.Module):
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
             # query model
-            encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
+            # print("encoder input : ", encoder_input.shape, pos_embed.shape, is_pad.shape )
+            encoder_output = self.encoder(encoder_input, pos=pos_embed[:encoder_input.shape[0]], src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
             latent_info = self.latent_proj(encoder_output)
             mu = latent_info[:, :self.latent_dim]
@@ -135,10 +148,13 @@ class DETRVAE(nn.Module):
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
+        # print("model a_hat shape : ", a_hat.shape)
         is_pad_hat = self.is_pad_head(hs)
         return a_hat, is_pad_hat, [mu, logvar]
 
-
+    # 왜 이 함수가 없을까.
+    # def set_state_dim(self, state_dim):
+    #     self.state_dim = state_dim
 
 class CNNMLP(nn.Module):
     def __init__(self, backbones, state_dim, camera_names):
@@ -244,7 +260,7 @@ def build(args):
         backbones,
         transformer,
         encoder,
-        state_dim=state_dim,
+        state_dim=args.state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
     )
